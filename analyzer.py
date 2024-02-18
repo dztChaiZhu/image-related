@@ -34,20 +34,56 @@ class Analyzer():
         L = self.totalCt
         return float(np.sum(ctt*(np.log2(L) - np.log2(ctt)))/L)
     
+
     def get_importantSymbols(self, number):
         if number < (self.sort_ct).size:
             return self.ap[self.sort_ct[-number:]]
         else:
             return self.ap
     
+#generate a list of different coefficients
+def initHashWeights(signature_length, seed) -> list:
+        randCoeff = []
+        for i in range(signature_length):
+            random.seed(i+seed) #different seeds ==> different number
+            randCoeff.append(random.getrandbits(32))
+        return randCoeff
 
-class wordSample(Analyzer):
-    def __init__(self, data: np.ndarray) -> None:
+#word sampling class has two main components
+class MinHash(Analyzer):
+    P = 2147483648 #the next prime that is larger than (1<<32 - 1)
+    signature_len = 64 #can tune for better minHash quality
+    A = np.array(initHashWeights(signature_len, 0), dtype = np.uint32)
+    B = np.array(initHashWeights(signature_len, 1031), dtype = np.uint32)
+    def __init__(self, data) -> None:
         super().__init__(data)
         self.data = data
-        random.seed(1987)
-        
+            
+    #a signature is a list of minHash with different generators.    
+    @classmethod 
+    def getSignatures(cls, wordList: list) -> int:
+        #map word list to set of numbers as a column vector
+        crcs = [crc32(item) for item in wordList]
+        shingles = np.array(crcs, dtype = np.uint32).reshape(-1, 1)
+        #the formula to operate hash onto shingles is easy: hash = (A*x + B) mod P
+        hashCodes = (shingles*cls.A + cls.B)%cls.P
+        return np.min(hashCodes, axis = 0).astype(np.uint32)
     
+    @staticmethod
+    def minHashSimilarity(signature1: np.ndarray, signature2: np.ndarray) -> float:
+        assert signature1.size == signature2.size
+        print("sig len ", signature1.size)
+        similarity = np.nonzero(signature1 == signature2)[0].size/signature1.size
+        return float(similarity)
+    
+    @staticmethod
+    def jaccardSimilarity(wordset1:set, wordset2:set) -> float:
+        union = wordset1.union(wordset2)
+        if len(union) == 0:
+            return 0.0
+        intersect = wordset1.intersection(wordset2)
+        return float(len(intersect))/len(union)
+
     #sample length = word_size strings, with sample distance = search_stride.    
     #then a frequency table of possible prefix is created (so that the word can be long, but 
     #the runtime can be adjusted), upon which an importance sampling is based. 
@@ -98,20 +134,29 @@ class wordSample(Analyzer):
             return list(word_set)
         return None
     
-    def getFingerPrint(self, wordList: list) -> int:
-        #uses hash values to represent bytes
-        crcs = [crc32(item) for item in wordList]
-        shingles = np.array(crcs, dtype = np.uint32).reshape(-1, 1)
-        
-       
-
 
 if __name__ == "__main__":
-    dummy = np.random.randint(0,256, size = 177, dtype = np.uint8)
-    axa = wordSample(dummy)
-    print(dummy)
-    ana = axa.prefixSample_internal(4, 7)
-    axa.getFingerPrint(ana)
+    import pathlib
+    import os
+    CUR_PATH = pathlib.Path(__file__).parent.resolve()
+    file = os.path.join(CUR_PATH, "dickens")
+    with open(file, 'rb') as finput:
+        #let us use two parts in dickens to test the minHash
+        finput.seek(1<<20)
+        part1 = np.frombuffer(finput.read(1<<20), dtype = np.uint8)
+        part2 = np.frombuffer(finput.read(1<<20), dtype = np.uint8)
+        ana1 = MinHash(part1)
+        ana2 = MinHash(part2)
+        wordlist1 = ana1.prefixSample_internal(1, 4)
+        wordlist2 = ana2.prefixSample_internal(1, 4)
+        signature1 = MinHash.getSignatures(wordlist1)
+        signature2 = MinHash.getSignatures(wordlist2)
+        # print(signature1)
+        # print(signature2)
+        print("minHash similary based on raw sampling %.3f%%"%(100*MinHash.minHashSimilarity(signature1, signature2)))
+        print("Jaccard similarity (slow) %.3f%%"%(100*MinHash.jaccardSimilarity(set(wordlist1), set(wordlist2))))
+
+    
     
 
 
